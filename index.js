@@ -50,72 +50,126 @@ app.post('/renew', async (req, res) => {
       timeout: 120000
     });
 
-    await delay(3000);
+    await delay(4000);
 
-    // Fill NIN
+    // Fill NIN using page.type (like successful script)
     console.log('   Filling NIN...');
-    await page.evaluate((ninValue) => {
-      const ninInput = document.getElementById('nin') || document.querySelector('input[name="nin"]');
-      if (ninInput) {
-        ninInput.focus();
-        ninInput.value = ninValue;
-        ninInput.dispatchEvent(new Event('input', { bubbles: true }));
-        ninInput.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    }, nin);
+    await page.waitForSelector('#nin', { timeout: 10000 });
+    await page.click('#nin');
+    await page.type('#nin', nin, { delay: 20 });
+    console.log('   ✓ NIN filled');
 
     await delay(500);
 
     // Fill ANEM ID
     console.log('   Filling ANEM ID...');
-    await page.evaluate((anemValue) => {
-      const anemInput = document.getElementById('numeroWassit') || 
-                       document.getElementById('anem_id') || 
-                       document.querySelector('input[name="numeroWassit"]');
-      if (anemInput) {
-        anemInput.focus();
-        anemInput.value = anemValue;
-        anemInput.dispatchEvent(new Event('input', { bubbles: true }));
-        anemInput.dispatchEvent(new Event('change', { bubbles: true }));
-      }
-    }, anemId);
+    await page.waitForSelector('#numeroWassit', { timeout: 10000 });
+    await page.click('#numeroWassit');
+    await page.type('#numeroWassit', anemId, { delay: 20 });
+    console.log('   ✓ ANEM ID filled');
 
-    await delay(1000);
+    await delay(500);
 
-    // Check checkbox
+    // Check checkbox using direct click (like successful script)
     console.log('   Checking checkbox...');
-    await page.evaluate(() => {
-      const checkbox = document.getElementById('acceptTerms') || document.querySelector('input[type="checkbox"]');
-      if (checkbox && !checkbox.checked) {
-        // Try clicking the wrapper first (Ant Design)
-        const wrapper = checkbox.closest('.ant-checkbox-wrapper') || checkbox.closest('label');
-        if (wrapper) {
-          wrapper.click();
-        }
-        
-        // Force check
-        checkbox.checked = true;
-        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-        
-        // Try React onChange
-        const reactKey = Object.keys(checkbox).find(k => k.startsWith('__reactProps'));
-        if (reactKey && checkbox[reactKey]?.onChange) {
-          checkbox[reactKey].onChange({ target: { checked: true } });
-        }
+    
+    // Method 1: Click on the label/wrapper
+    try {
+      await page.click('.ant-checkbox-wrapper');
+      console.log('   ✓ Clicked checkbox wrapper');
+    } catch (e) {
+      console.log('   Wrapper click failed, trying label...');
+      try {
+        await page.click('label[for="acceptTerms"]');
+      } catch (e2) {
+        // Try clicking the checkbox directly
+        await page.click('#acceptTerms');
       }
+    }
+    
+    await delay(500);
+    
+    // Verify checkbox state
+    let isChecked = await page.evaluate(() => {
+      const cb = document.getElementById('acceptTerms');
+      return cb?.checked;
     });
+    console.log('   Checkbox state after click:', isChecked);
+    
+    // If not checked, try alternative methods
+    if (!isChecked) {
+      console.log('   Trying alternative checkbox methods...');
+      await page.evaluate(() => {
+        const checkbox = document.getElementById('acceptTerms');
+        if (checkbox) {
+          // Force the checked state
+          checkbox.checked = true;
+          
+          // Trigger all possible events
+          ['click', 'change', 'input'].forEach(eventType => {
+            checkbox.dispatchEvent(new Event(eventType, { bubbles: true }));
+          });
+          
+          // Try React synthetic event
+          const reactKey = Object.keys(checkbox).find(k => k.startsWith('__reactProps'));
+          if (reactKey && checkbox[reactKey]?.onChange) {
+            checkbox[reactKey].onChange({ target: { checked: true } });
+          }
+        }
+      });
+      
+      isChecked = await page.evaluate(() => document.getElementById('acceptTerms')?.checked);
+      console.log('   Checkbox state after force:', isChecked);
+    }
 
     await delay(1000);
 
-    // Click submit button
-    console.log('   Clicking submit button...');
-    await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button'))
-        .find(b => b.textContent.includes('Prolonger'));
-      if (btn && !btn.disabled) {
-        btn.click();
+    // Wait for button to be enabled
+    console.log('   Waiting for button...');
+    let attempts = 0;
+    let btnClicked = false;
+    
+    while (attempts < 5 && !btnClicked) {
+      const buttonState = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button'))
+          .find(b => b.textContent.includes('Prolonger'));
+        return btn ? { disabled: btn.disabled, text: btn.textContent } : null;
+      });
+      
+      console.log('   Button:', buttonState?.disabled ? 'disabled' : 'enabled');
+      
+      if (buttonState && !buttonState.disabled) {
+        // Use page.click for the button
+        try {
+          await page.evaluate(() => {
+            const btn = Array.from(document.querySelectorAll('button'))
+              .find(b => b.textContent.includes('Prolonger'));
+            if (btn) btn.click();
+          });
+          btnClicked = true;
+        } catch (e) {
+          console.log('   Button click error:', e.message);
+        }
+        break;
       }
-    });
+      
+      // Retry checkbox
+      console.log('   Retrying checkbox... attempt', attempts + 1);
+      try {
+        await page.click('.ant-checkbox-wrapper');
+      } catch (e) {
+        await page.evaluate(() => {
+          const cb = document.getElementById('acceptTerms');
+          const wrapper = cb?.closest('.ant-checkbox-wrapper') || cb?.parentElement;
+          if (wrapper) wrapper.click();
+        });
+      }
+      
+      await delay(1000);
+      attempts++;
+    }
+    
+    console.log('   ✓ Submit button clicked:', btnClicked);
 
     // Wait for result
     console.log('   Waiting for result...');
@@ -123,16 +177,34 @@ app.post('/renew', async (req, res) => {
 
     // Check for success
     const resultText = await page.evaluate(() => document.body.innerText);
+    console.log('   Page text (first 500 chars):', resultText.substring(0, 500));
+    
     const isSuccess = resultText.includes('succès') || 
                      resultText.includes('prolongée') ||
-                     resultText.includes('Demande prolongée');
+                     resultText.includes('Demande prolongée') ||
+                     resultText.includes('validée');
+
+    // Check for error messages
+    const hasError = resultText.includes('erreur') || 
+                    resultText.includes('invalide') ||
+                    resultText.includes('incorrect') ||
+                    resultText.includes('existe pas');
+
+    if (hasError) {
+      console.log('   ❌ Error detected on page');
+    }
 
     if (!isSuccess) {
-      console.log('   ❌ Renewal failed');
+      console.log('   ❌ Renewal failed - success text not found');
+      
+      // Take screenshot for debugging
+      const debugScreenshot = await page.screenshot({ type: 'jpeg', quality: 80, fullPage: true });
       await browser.close();
+      
       return res.status(400).json({ 
         success: false, 
-        error: 'Renewal failed - check your credentials or try again later' 
+        error: 'Renewal failed - check your credentials or try again later',
+        screenshot: debugScreenshot.toString('base64')
       });
     }
 
