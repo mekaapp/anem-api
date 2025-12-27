@@ -40,11 +40,14 @@ app.post('/renew', async (req, res) => {
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 900 });
 
+    // Set user agent to avoid bot detection
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
     // Navigate to the page
     console.log('   Navigating to ANEM...');
     await page.goto('https://wassitonline.anem.dz/postulation/prolongationDemande', {
-      waitUntil: 'networkidle2',
-      timeout: 60000
+      waitUntil: 'domcontentloaded',
+      timeout: 120000
     });
 
     await delay(3000);
